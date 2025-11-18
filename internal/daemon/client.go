@@ -65,14 +65,18 @@ func (c *Client) Close() error {
 }
 
 type DeviceStatus struct {
-	UUID         string
-	Card         string
-	DeviceNode   string
-	Temperature  float64
-	Power        float64
-	DRAMUsedGiB  float64
-	DRAMTotalGiB float64
-	Utilization  float64
+	UUID            string
+	Name            string
+	DeviceID        string
+	Card            string
+	Temperature     float64
+	Power           float64
+	DRAMUsedGiB     float64
+	DRAMTotalGiB    float64
+	Utilization     float64
+	DriverVersion   string
+	FirmwareVersion string
+	SMCVersion      string
 }
 
 func (c *Client) GetDeviceStatus(ctx context.Context) ([]DeviceStatus, error) {
@@ -115,15 +119,13 @@ func (c *Client) getServiceableDevices(ctx context.Context) ([]*rblnservicespb.D
 
 func (c *Client) buildDeviceStatus(ctx context.Context, device *rblnservicespb.Device) (DeviceStatus, bool) {
 	metrics := c.fetchDeviceMetrics(ctx, device)
-
-	if metrics.hw == nil && metrics.mem == nil && metrics.util == nil {
-		return DeviceStatus{}, false
-	}
+	version := c.getDeviceVersion(ctx, device)
 
 	status := DeviceStatus{
-		UUID:       device.GetUuid(),
-		Card:       cardNameFromDevID(device.GetDevId()),
-		DeviceNode: device.GetName(),
+		UUID:     device.GetUuid(),
+		Name:     device.GetName(),
+		DeviceID: device.GetDevId(),
+		Card:     cardNameFromDevID(device.GetDevId()),
 	}
 
 	if metrics.hw != nil {
@@ -136,6 +138,12 @@ func (c *Client) buildDeviceStatus(ctx context.Context, device *rblnservicespb.D
 	}
 	if metrics.util != nil {
 		status.Utilization = float64(metrics.util.GetUtilization())
+	}
+
+	if version != nil {
+		status.DriverVersion = version.GetDrvVersion()
+		status.FirmwareVersion = version.GetFwVersion()
+		status.SMCVersion = version.GetSmcVersion()
 	}
 
 	return status, true
@@ -188,6 +196,15 @@ func (c *Client) fetchDeviceMetrics(ctx context.Context, device *rblnservicespb.
 		mem:  mem,
 		util: util,
 	}
+}
+
+func (c *Client) getDeviceVersion(ctx context.Context, device *rblnservicespb.Device) *rblnservicespb.VersionInfo {
+	result, err := c.client.GetVersion(ctx, device)
+	if err != nil {
+		slog.Error("failed to get version", "device", device.GetName(), "error", err)
+		return nil
+	}
+	return result
 }
 
 type deviceMetrics struct {

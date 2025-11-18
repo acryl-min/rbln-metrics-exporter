@@ -50,7 +50,7 @@ func Start(ctx context.Context, config Config) error {
 	}
 
 	metricRegistry := prometheus.NewRegistry()
-	collectorFactory := collector.NewCollectorFactory(metricRegistry, dClient)
+	collectorFactory := collector.NewCollectorFactory(metricRegistry, dClient, config.NodeName)
 	collectors := collectorFactory.NewCollectors()
 
 	sched := scheduler.NewScheduler(collectors, config.Interval)
