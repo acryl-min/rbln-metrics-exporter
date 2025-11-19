@@ -65,14 +65,19 @@ func (c *Client) Close() error {
 }
 
 type DeviceStatus struct {
-	UUID         string
-	Card         string
-	DeviceNode   string
-	Temperature  float64
-	Power        float64
-	DRAMUsedGiB  float64
-	DRAMTotalGiB float64
-	Utilization  float64
+	UUID            string
+	Name            string
+	DeviceID        string
+	Card            string
+	Temperature     float64
+	Power           float64
+	DRAMUsedGiB     float64
+	DRAMTotalGiB    float64
+	Utilization     float64
+	DriverVersion   string
+	FirmwareVersion string
+	SMCVersion      string
+	DeviceStatus    int
 }
 
 func (c *Client) GetDeviceStatus(ctx context.Context) ([]DeviceStatus, error) {
@@ -87,6 +92,18 @@ func (c *Client) GetDeviceStatus(ctx context.Context) ([]DeviceStatus, error) {
 	for _, d := range devices {
 		if status, ok := c.buildDeviceStatus(ctx, d); ok {
 			statuses = append(statuses, status)
+		}
+	}
+	deviceinfos, err := c.getTotalDeviceInfo(ctx)
+	if err != nil {
+		slog.Warn("failed to get serviceable devices", "err", err)
+		return nil, fmt.Errorf("failed to get serviceable devices: %v", err)
+	}
+	for _, info := range deviceinfos {
+		for i, status := range statuses {
+			if status.UUID == info.GetUuid() {
+				statuses[i].DeviceStatus = int(info.GetErrStatus())
+			}
 		}
 	}
 
@@ -113,17 +130,35 @@ func (c *Client) getServiceableDevices(ctx context.Context) ([]*rblnservicespb.D
 	return devices, nil
 }
 
-func (c *Client) buildDeviceStatus(ctx context.Context, device *rblnservicespb.Device) (DeviceStatus, bool) {
-	metrics := c.fetchDeviceMetrics(ctx, device)
-
-	if metrics.hw == nil && metrics.mem == nil && metrics.util == nil {
-		return DeviceStatus{}, false
+func (c *Client) getTotalDeviceInfo(ctx context.Context) ([]*rblnservicespb.DeviceInfo, error) {
+	stream, err := c.client.GetTotalInfo(ctx, &rblnservicespb.Empty{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to GetTotalInfo RPC: %w", err)
 	}
 
+	var deviceinfos []*rblnservicespb.DeviceInfo
+	for {
+		d, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("failed to receive device: %w", err)
+		}
+		deviceinfos = append(deviceinfos, d)
+	}
+	return deviceinfos, nil
+}
+
+func (c *Client) buildDeviceStatus(ctx context.Context, device *rblnservicespb.Device) (DeviceStatus, bool) {
+	metrics := c.fetchDeviceMetrics(ctx, device)
+	version := c.getDeviceVersion(ctx, device)
+
 	status := DeviceStatus{
-		UUID:       device.GetUuid(),
-		Card:       cardNameFromDevID(device.GetDevId()),
-		DeviceNode: device.GetName(),
+		UUID:     device.GetUuid(),
+		Name:     device.GetName(),
+		DeviceID: device.GetDevId(),
+		Card:     cardNameFromDevID(device.GetDevId()),
 	}
 
 	if metrics.hw != nil {
@@ -136,6 +171,12 @@ func (c *Client) buildDeviceStatus(ctx context.Context, device *rblnservicespb.D
 	}
 	if metrics.util != nil {
 		status.Utilization = float64(metrics.util.GetUtilization())
+	}
+
+	if version != nil {
+		status.DriverVersion = version.GetDrvVersion()
+		status.FirmwareVersion = version.GetFwVersion()
+		status.SMCVersion = version.GetSmcVersion()
 	}
 
 	return status, true
@@ -188,6 +229,15 @@ func (c *Client) fetchDeviceMetrics(ctx context.Context, device *rblnservicespb.
 		mem:  mem,
 		util: util,
 	}
+}
+
+func (c *Client) getDeviceVersion(ctx context.Context, device *rblnservicespb.Device) *rblnservicespb.VersionInfo {
+	result, err := c.client.GetVersion(ctx, device)
+	if err != nil {
+		slog.Error("failed to get version", "device", device.GetName(), "error", err)
+		return nil
+	}
+	return result
 }
 
 type deviceMetrics struct {

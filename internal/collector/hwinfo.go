@@ -2,18 +2,22 @@ package collector
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rebellions-sw/rbln-metrics-exporter/internal/daemon"
 )
 
 type HardwareInfoCollector struct {
-	temperature *prometheus.GaugeVec
-	power       *prometheus.GaugeVec
-	dClient     *daemon.Client
+	temperature       *prometheus.GaugeVec
+	power             *prometheus.GaugeVec
+	dClient           *daemon.Client
+	isKubernetes      bool
+	podResourceMapper *PodResourceMapper
+	NodeName          string
 }
 
-func NewHardwareInfoCollector(dClient *daemon.Client) *HardwareInfoCollector {
+func NewHardwareInfoCollector(dClient *daemon.Client, isKubernetes bool, podResourceMapper *PodResourceMapper, nodeName string) *HardwareInfoCollector {
 	return &HardwareInfoCollector{
 		temperature: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
@@ -27,7 +31,10 @@ func NewHardwareInfoCollector(dClient *daemon.Client) *HardwareInfoCollector {
 				Help: "Card power usage (W)",
 			}, commonLabels,
 		),
-		dClient: dClient,
+		dClient:           dClient,
+		isKubernetes:      isKubernetes,
+		podResourceMapper: podResourceMapper,
+		NodeName:          nodeName,
 	}
 }
 
@@ -37,15 +44,29 @@ func (h *HardwareInfoCollector) Register(registerer prometheus.Registerer) {
 }
 
 func (h *HardwareInfoCollector) GetMetrics(ctx context.Context) error {
+	podResourceInfo, err := h.podResourceMapper.GetResourcesInfo()
+	if err != nil {
+		slog.Error("Failed to get resources info", "error", err)
+		return err
+	}
+
 	deviceStatus, err := h.dClient.GetDeviceStatus(ctx)
 	if err != nil {
 		return err
 	}
 	for _, s := range deviceStatus {
 		labels := prometheus.Labels{
-			"card":   s.Card,
-			"uuid":   s.UUID,
-			"device": s.DeviceNode,
+			"card":             s.Card,
+			"uuid":             s.UUID,
+			"name":             s.Name,
+			"deviceID":         s.DeviceID,
+			"hostname":         h.NodeName,
+			"driver_version":   s.DriverVersion,
+			"firmware_version": s.FirmwareVersion,
+			"smc_version":      s.SMCVersion,
+			"namespace":        podResourceInfo[s.Name].Namespace,
+			"pod":              podResourceInfo[s.Name].Name,
+			"container":        podResourceInfo[s.Name].ContainerName,
 		}
 		h.temperature.With(labels).Set(s.Temperature)
 		h.power.With(labels).Set(s.Power)

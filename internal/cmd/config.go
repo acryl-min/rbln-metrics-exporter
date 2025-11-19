@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type Config struct {
 	Port          int
 	Interval      time.Duration
 	Oneshot       bool
+	NodeName      string
 }
 
 type configBuilder struct {
@@ -32,6 +34,7 @@ func newConfigBuilder(getenv func(string) string) *configBuilder {
 		Port:          getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_PORT", 9090),
 		Interval:      time.Duration(getenvIntDefault(getenv, "RBLN_METRICS_EXPORTER_INTERVAL", 5)) * time.Second,
 		Oneshot:       getenvBoolDefault(getenv, "RBLN_METRICS_EXPORTER_ONESHOT", false),
+		NodeName:      detectNodeName(getenv, "NODE_NAME", "unknown"),
 	}
 
 	return &configBuilder{
@@ -45,6 +48,7 @@ func (b *configBuilder) bindFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&b.cfg.Port, "port", b.cfg.Port, "Port to listen for requests")
 	fs.IntVar(&b.intervalSec, "interval", b.intervalSec, fmt.Sprintf("Interval of collecting metrics (%d-%d seconds)", MinIntervalSeconds, MaxIntervalSeconds))
 	fs.BoolVar(&b.cfg.Oneshot, "oneshot", b.cfg.Oneshot, "Collect once and exit")
+	fs.StringVar(&b.cfg.NodeName, "node-name", b.cfg.NodeName, "Name of the node")
 }
 
 func (b *configBuilder) finalize() error {
@@ -95,4 +99,14 @@ func stripSchemePrefix(addr string) string {
 		return strings.TrimPrefix(addr, "https://")
 	}
 	return addr
+}
+
+func detectNodeName(getenv func(string) string, key string, def string) string {
+	if v := getenv(key); v != "" {
+		return v
+	}
+	if host, err := os.Hostname(); err == nil && host != "" {
+		return host
+	}
+	return def
 }
